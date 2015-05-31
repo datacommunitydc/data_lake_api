@@ -1,0 +1,50 @@
+<IfModule mod_ssl.c>
+<VirtualHost _default_:443>
+        ServerAdmin info@datacommunitydc.org
+        ServerName apy.datacommunitydc.org
+        ServerAlias www.apy.datacommunitydc.org
+        DocumentRoot /var/www
+        
+        WSGIDaemonProcess datacommunitydc_apy user=ubuntu group=ubuntu
+        WSGIScriptAlias / /var/www/datacommunitydc_apy/datacommunitydc_apy.wsgi
+        
+        <Directory /var/www/datacommunitydc_apy>
+                WSGIProcessGroup datacommunitydc_apy
+                WSGIApplicationGroup %{GLOBAL}
+                Order deny,allow
+                Allow from all
+        </Directory>
+
+        ErrorLog ${APACHE_LOG_DIR}/error.log
+        # Possible values include: debug, info, notice, warn, error, crit,
+        # alert, emerg.
+        LogLevel warn
+
+        CustomLog ${APACHE_LOG_DIR}/ssl_access.log combined
+
+
+        #   SSL Engine Switch:
+        #   Enable/Disable SSL for this virtual host.
+        SSLEngine on
+        SSLCertificateFile    /etc/ssl/certs/datacommunitydc.org.pem
+        SSLCertificateChainFile /etc/ssl/certs/datacommunitydc.org.pem
+        SSLCertificateKeyFile /etc/ssl/private/star_datacommunitydc_org.key
+        <Location />
+                SSLRequireSSL On
+        #         #SSLVerifyClient optional
+        #         #SSLVerifyDepth 1
+        #         SSLOptions +StdEnvVars +StrictRequire
+        </Location>
+
+        #SSLOptions +FakeBasicAuth +ExportCertData +StrictRequire
+
+        #   SSL Protocol Adjustments:
+        #   "force-response-1.0" for this.
+        BrowserMatch "MSIE [2-6]" \
+                nokeepalive ssl-unclean-shutdown \
+                downgrade-1.0 force-response-1.0
+        # MSIE 7 and newer should be able to use keepalive
+        BrowserMatch "MSIE [17-9]" ssl-unclean-shutdown
+        
+</VirtualHost>
+</IfModule>

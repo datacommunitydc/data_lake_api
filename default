@@ -1,0 +1,6 @@
+<VirtualHost *:80>
+        ServerAdmin info@datacommunitydc.org
+        ServerName apy.datacommunitydc.org
+        ServerAlias www.apy.dc2.com
+        Redirect permanent / https://apy.dc2.org/
+</VirtualHost>
