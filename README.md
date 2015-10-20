@@ -60,6 +60,9 @@ curl -i -F "app_id=12345EXAMPLE" -F "app_key=abc6943jqq509x26EXAMPLE" -F "file=@
 GET the status of a job:
 curl -i -X GET "http://127.0.0.1:5000/v1/documents/queue/f4d732ae-4264-40b5-9540-bf75f4799a76?app_id=12345EXAMPLE&app_key=abc6943jqq509x26EXAMPLE"
 
+GET Twitter Data:
+curl -i -X GET "http://127.0.0.1:5000/v1/documents/twitter/f4d732ae-4264-40b5-9540-bf75f4799a76?app_id=12345EXAMPLE&app_key=abc6943jqq509x26EXAMPLE&time_range=MMDDYYYY-MMDDYYYY"
+
 GET the location of the result files:
 curl -i -X GET "http://127.0.0.1:5000/v1/documents/f4d732ae-4264-40b5-9540-bf75f4799a76?app_id=12345EXAMPLE&app_key=abc6943jqq509x26EXAMPLE"
 

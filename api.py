@@ -4,7 +4,7 @@
 from flask import Flask, request, Response
 from werkzeug.exceptions import NotFound, Unauthorized, UnsupportedMediaType, BadRequest
 import boto
-import json
+import json, ujson
 import uuid
 import redis
 import amqp
@@ -38,10 +38,11 @@ if USESSL:
     ctx.use_privatekey_file('ssl/ssl.key')
     ctx.use_certificate_file('ssl/ssl.cert')
 
-MAX_MEGABYTES = 2
+MAX_MEGABYTES = 10000 # 10Gigs, what do we believe would limit what we ingest?
 app.config['MAX_CONTENT_LENGTH'] = MAX_MEGABYTES * 1024 * 1024
 
-ACCEPTED_MIMETYPES = ["text/plain",
+ACCEPTED_MIMETYPES = ["application/json",
+                      "text/plain",
                       "text/csv",
                       "application/vnd.ms-excel",
                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]
@@ -50,7 +51,7 @@ ERROR_MESSAGES = {404: "The requested resource cannot be found. Please check the
                   401: "You are not authenticated to use this resource. Please provide a valid app_id and app_key pair.",
                   413: "The file that was submitted is too large. Please submit a file smaller than %i megabytes." % MAX_MEGABYTES,
                   415: "The file that was submitted is an unsupported type. Please submit valid plain text, CSV, or an Excel spreadsheet.",
-                  500: "An error has occurred in the analysis. Please contact support@gosynapsify.com for assistance.",
+                  500: "An error has occurred in the analysis. Please contact support@datacommunitydc.org for assistance.",
                   400: "The request is missing required parameters or otherwise malformed. Please check the API documentation and try again."
                   }
 
@@ -103,7 +104,7 @@ def validate_input_file(handle, mimetype):
     """Validate that an input file is a known text encoding if text or a readable Excel spreadsheet. 
        Raise UnsupportedMediaType error if not."""
     handle.seek(0)
-    if mimetype in ("text/plain", "text/csv"):
+    if mimetype in ("text/plain", "text/csv", "application/json"):
         buf = handle.read(512)
         if len(buf) > 0:
             merlin = magic.Magic(mime_encoding=True)
@@ -151,7 +152,7 @@ def handle_internal_error(err):
     error_message = {"api_user": "",
            "api_key": "",
            "to": SUPPORTEMAIL,
-           "from": DC2EMAIL,
+           "from": "info@datacommunitydc.org",
            "subject": "DC2 Data Lake API Error",
            "text": "An error ocurred in the DC2 Data Lake API: \n\nENDPOINT: " \
                 + request.path + " " + request.method + "\n\n" + exc}
@@ -176,24 +177,26 @@ def get_status(app_id, app_key, task_id):
     key = "jobs/" + make_key(app_id, app_key, task_id)
     return json.loads(RED.get(key))
 
-def submit_job(app_id, app_key, task_id, mimetype, text_col, dedupe):
+def submit_job(user_id, app_key, task_id, mimetype):
     """Submit a job to the queue for the Celery worker. Create the required JSON message and post it to RabbitMQ."""
     # These are the args that the Python function in the adjunct processor will use.
-    kwargs = {"app_id": app_id,
+    kwargs = {"user_id": user_id,
               "app_key": app_key,
               "task_id": task_id,
               "format": mimetype,
-              "text_col": text_col,
-              "dedupe": dedupe,
               "s3_endpoint": S3ENDPOINT,
               "bucket": BUCKET,
               "redis_port": REDISPORT,
               "redis_host": REDISHOST}
+
+    S3.buckets.all()
+    S3.create_bucket(BUCKET)
+
     # Recreate a celery message manually so that we don't need to import celery_tasks.py which has heavy dependencies. 
     job = {"id": task_id,
-           # "task": "synapsify_adjunct.celery_tasks.synapsify_master",
            "task": "dc2_master",
            "kwargs": kwargs}
+
     # Connect to RabbitMQ and post.
     conn = amqp.Connection(host=RMQHOST, port=RMQPORT, userid=RMQUSERNAME, password=RMQPASSWORD, virtual_host=RMQVHOST, insist=False)
     cha = conn.channel()
@@ -218,7 +221,7 @@ def documents():
         # Get the file, validate the type, and make sure the file itself is valid.
         # The EntityTooLarge error is raised automatically by Flask.
         submitted_file = request.files.get('file')
-        size = len(submitted_file.read())
+        # size = len(submitted_file.read())
         ctype = submitted_file.content_type
         if ctype not in ACCEPTED_MIMETYPES:
             app.logger.error("Unsupported Media Type: %s", ctype)
@@ -231,10 +234,6 @@ def documents():
             text_col = request.form.get("text_col")
         else:
             text_col = 0
-        if request.form.get("dedupe"):
-            dedupe = request.form.get("dedupe")
-        else:
-            dedupe = False
 
         # If we've reached this point, everything looks good so generate a task id.
         task_id = str(uuid.uuid4())
@@ -242,8 +241,12 @@ def documents():
         # Post initial status to Redis, upload to s3, and submit the job to RabbitMQ.
         key = make_key(app_id, app_key, task_id)
         post_initial_status(key)
+        ###_____________________________________________________________________
+        # HOW DO WE WANT TO ORGANIZE S3?? HOW DO WE WANT TO ORGANIZE S3??
         S3.new_key("input/"+key).set_contents_from_file(submitted_file)
-        submit_job(app_id, app_key, task_id, ctype, text_col, dedupe)
+
+        # APPLICABLE ONLY IF WE HAVE AN AUTOMATED PROCESS ON ANOTHER SERVER WITH EACH SUBMISSION
+        # submit_job(app_id, app_key, task_id, ctype, text_col, dedupe)
 
         # Finally, return a message to the client and write to the log file.
         data = {"status": "success",
@@ -285,6 +288,10 @@ def documents():
         return make_response(data, 200)
 
 
+@app.route(ROOT + '/twitter', methods=['GET'])
+def get_twitter():
+    time_range = request.args.get("time_range") #MMDDYYYY-MMDDYYYY
+
 @app.route(ROOT + '/queue/<string:task_id>', methods=['GET'])
 def queue(task_id):
     """This endpoint is where clients poll to find the status of their jobs."""
@@ -312,10 +319,10 @@ def queue(task_id):
         app.logger.info("Looks like there was a DC2 Master error:\n%s", status)
         data["sad_face"] = ":_("
         try:
-            data["taskStatusUpdate"] += " Please contact support@gosynapsify.com."
+            data["taskStatusUpdate"] += " Please contact support@datacommunitydc.org."
         except KeyError:
             app.logger.error("Key ERROR! No taskStatusUpdate")
-            data["taskStatusUpdate"] = " Please contact support@gosynapsify.com."
+            data["taskStatusUpdate"] = " Please contact support@datacommunitydc.org."
         data["error"] = data["taskStatusUpdate"]
         app.logger.warning("An error ocurred in the adjunct: %s", status["error"])
         code = 500
