@@ -148,7 +148,11 @@ def SaveGroupEvents(group_events):
 
 def CreateMemberConnections():
     '''
-    Get data from DC2 S3/database and create member associations
+    Get data from DC2 S3/database and create member associations.
+    There are lots of ways to associate two people, lets just list them all in a hash
+    1. Attended same event
+    2. Interested in the same topic
+    3. Same Keywords (TFIDF of all DC2?)
 
     :return:
     '''
@@ -157,14 +161,17 @@ def CreateMemberConnections():
     gmems_keys = gmems.keys()
     for m1,gmem1 in enumerate(gmems_keys):
         for m2,gmem2 in enumerate(gmems_keys):
-            # There are lots of ways to associate two people, lets just list them all in a hash
-            # 1. Attended same event
-            # 2. Interested in the same topic
-            # 3. Same Keywords (TFIDF of all DC2?)
 
-def RankMemberByKeyword(keyword):
+
+    SaveMemberConnections()
+
+def RankMemberByKeyword(topic):
     '''
-    When we search
+    When we search for a subject, we are interested in people that:
+    1. Attend events with that topic
+    2. Attend events we attend
+    3. Have the topic in Meetup topics
+    4. Have the topic in Group Description or Overall Description
 
     :param keyword:
     :return:
