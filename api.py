@@ -17,20 +17,26 @@ import math
 import magic
 import xlrd
 from logging import FileHandler
+from config import Config
 from logging.handlers import RotatingFileHandler
+# from config import *
 
 # Install Dependencies:
 # sudo apt-get update
 # sudo apt-get install python-setuptools python-libxml2
 # sudo easy_install pip
 # pip install flask boto redis celery filemagic xlrd
+# pip install Flask-DotEnv
 # Get the latest ThreeScale python library here: https://github.com/3scale/3scale_ws_api_for_python
 # and follow the directions to install
 
-from config import *
-
 app = Flask(__name__)
 app.config.from_object(__name__)
+app.config.from_object(Config["DC2DL_config"])
+
+HANDLER = FileHandler(LOGFILE)
+HANDLER.setLevel(logging.INFO)
+app.logger.addHandler(HANDLER)
 
 if USESSL:
     from OpenSSL import SSL
@@ -48,7 +54,7 @@ ACCEPTED_MIMETYPES = ["application/json",
                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"]
 
 ERROR_MESSAGES = {404: "The requested resource cannot be found. Please check the API documentation and try again.",
-                  401: "You are not authenticated to use this resource. Please provide a valid app_id and app_key pair.",
+                  401: "You are not authenticated to use this resource. Please provide a valid user_id and user_key pair.",
                   413: "The file that was submitted is too large. Please submit a file smaller than %i megabytes." % MAX_MEGABYTES,
                   415: "The file that was submitted is an unsupported type. Please submit valid plain text, CSV, or an Excel spreadsheet.",
                   500: "An error has occurred in the analysis. Please contact support@datacommunitydc.org for assistance.",
@@ -61,36 +67,37 @@ ROOT = "/v1/documents"
 RED = redis.Redis(host=REDISHOST, port=REDISPORT, db=0)
 S3 = boto.connect_s3(aws_access_key_id=AWSKEY, aws_secret_access_key=AWSSECRET).get_bucket(BUCKET)
 
-def make_key(app_id, app_key, task_id):
-    """This is a naming convention for both redis and s3"""
-    return app_id + "/" + app_key + "/" + task_id
+def make_key(user_id, user_key, task_id):
+    """
+    This is a naming convention for both redis and s3
+    The task_id keeps track of the data the user is uploading or maintaining. NECESSARY?
+    """
+    return user_id + "/" + user_key + "/" + task_id
 
 def check_credentials():
-    """Check the credentials with 3scale. Return app_id and app_key pair if valid. 
+    """Check the credentials with 3scale. Return user_id and user_key pair if valid.
        Raise Unauthorized error if not."""
-    # request is a global variable from flask and contains all info about the request from the client.
-    if request.method == "GET":
-        app_id = request.args.get("app_id")
-        app_key = request.args.get("app_key")
-    elif request.method == "POST":
-        app_id = request.form.get("app_id")
-        app_key = request.form.get("app_key")
-    if app_id == None or app_key == None:
-        raise Unauthorized()
-    authrep = ThreeScalePY.ThreeScaleAuthRep(THREESCALEKEY, app_id, app_key)
-    if authrep.authrep():
-        return app_id, app_key
-    raise Unauthorized()
 
-def check_credentials_and_status(task_id):
-    """Check the credentials and status in one go for use with retrieval functions. 
-       Raise NotFound error if status isn't complete."""
-    app_id, app_key = check_credentials()
-    status = get_status(app_id, app_key, task_id)
-    if status["documentStatus"] != "COMPLETE":
-        app.logger.error("Status failed in check_credentials_and_status")
-        raise NotFound()
-    return app_id, app_key, status
+    # We'd like to know who is accessing our API in general.
+    try:
+        origin = str(request.environ['HTTP_ORIGIN'])
+    except:
+        origin = 'UNKNOWN'
+
+    app.logger.info("Checking Credentials.")
+    user_id  = str(request.args.get("user_id"))
+    user_key = str(request.args.get("user_key"))
+    app.logger.info("Origin: "+origin)
+    app.logger.info("Checking " + user_id + " against " + str(USER_IDS))
+
+    if user_id == None or user_key == None:
+        app.logger.info("They have to give us an id and key to work with!")
+        raise Unauthorized()
+    if (user_id in USER_IDS) & (user_key in USER_KEYS[user_id]):
+        app.logger.info("Ok, they know what they are asking for. Moving on.")
+        return user_id, user_key
+    app.logger.info("Are they trying to hack us?")
+    raise Unauthorized()
 
 def validate_parameters(params, expected_params):
     """Validate a list of parameters. Return BadRequest error if invalid."""
@@ -99,24 +106,6 @@ def validate_parameters(params, expected_params):
             ptype(params[key])
         except KeyError:
             raise BadRequest()
-
-def validate_input_file(handle, mimetype):
-    """Validate that an input file is a known text encoding if text or a readable Excel spreadsheet. 
-       Raise UnsupportedMediaType error if not."""
-    handle.seek(0)
-    if mimetype in ("text/plain", "text/csv", "application/json"):
-        buf = handle.read(512)
-        if len(buf) > 0:
-            merlin = magic.Magic(mime_encoding=True)
-            encoding = merlin.from_buffer(buf)
-            if encoding == "binary":
-                raise UnsupportedMediaType()
-    else:
-        try:
-            xlrd.open_workbook(file_contents=handle.read())
-        except AssertionError: # This is the error created if we can't open the spreadsheet
-            raise UnsupportedMediaType()
-    handle.seek(0)
 
 def make_response(data, code, headers=None):
     """Create a complete JSON response from an object using the Flask Response type"""
@@ -161,27 +150,11 @@ def handle_internal_error(err):
     app.logger.error("ERROR: " + error_message["text"])      
     return make_response(message, 500)
 
-def post_initial_status(key):
-    """Post the first status message to Redis. Redis messages are used by the queue endpoint."""
-    key = "jobs/" + key
-    message = {"percentComplete": 0,
-               "taskStatusUpdate": "Initializing...",
-               "documentStatus": "QUEUED"}
-    value = json.dumps(message)
-    RED.set(key, value)
-    # Publish to a channel so that clients such as the webapp can subscribe instead of poll.
-    RED.publish(key, value)
-
-def get_status(app_id, app_key, task_id):
-    """Get the status from Redis as a dictionary."""
-    key = "jobs/" + make_key(app_id, app_key, task_id)
-    return json.loads(RED.get(key))
-
-def submit_job(user_id, app_key, task_id, mimetype):
+def submit_job(user_id, user_key, task_id, mimetype):
     """Submit a job to the queue for the Celery worker. Create the required JSON message and post it to RabbitMQ."""
     # These are the args that the Python function in the adjunct processor will use.
     kwargs = {"user_id": user_id,
-              "app_key": app_key,
+              "user_key": user_key,
               "task_id": task_id,
               "format": mimetype,
               "s3_endpoint": S3ENDPOINT,
@@ -216,7 +189,7 @@ def documents():
         # Log that we got a request
         app.logger.error("Got a file POST request")
         # Extract and validate credentials. 
-        app_id, app_key = check_credentials()
+        user_id, user_key = check_credentials()
 
         # Get the file, validate the type, and make sure the file itself is valid.
         # The EntityTooLarge error is raised automatically by Flask.
@@ -239,14 +212,14 @@ def documents():
         task_id = str(uuid.uuid4())
 
         # Post initial status to Redis, upload to s3, and submit the job to RabbitMQ.
-        key = make_key(app_id, app_key, task_id)
+        key = make_key(user_id, user_key, task_id)
         post_initial_status(key)
         ###_____________________________________________________________________
         # HOW DO WE WANT TO ORGANIZE S3?? HOW DO WE WANT TO ORGANIZE S3??
         S3.new_key("input/"+key).set_contents_from_file(submitted_file)
 
         # APPLICABLE ONLY IF WE HAVE AN AUTOMATED PROCESS ON ANOTHER SERVER WITH EACH SUBMISSION
-        # submit_job(app_id, app_key, task_id, ctype, text_col, dedupe)
+        # submit_job(user_id, user_key, task_id, ctype, text_col, dedupe)
 
         # Finally, return a message to the client and write to the log file.
         data = {"status": "success",
@@ -257,15 +230,15 @@ def documents():
                                     "href": ROOT + "/queue/" + task_id,
                                     "type": "application/json"}]}}
 
-        app.logger.error("File successfully submitted. type: %s, size: %i, app_id: %s, task_id: %s, dedupe: %s", ctype, size, app_id, task_id, dedupe)
+        app.logger.error("File successfully submitted. type: %s, size: %i, user_id: %s, task_id: %s, dedupe: %s", ctype, size, user_id, task_id, dedupe)
         return make_response(data, 202, headers = {"Location": ROOT + "/queue/" + task_id})
 
     if request.method == "GET":
         # Extract and validate credentials. 
-        app_id, app_key = check_credentials()
+        user_id, user_key = check_credentials()
 
         # Get the list of previous task ids from s3.
-        outputs = set([key.name.split("/")[-2] for key in S3.list(prefix="output/" + app_id + "/" + app_key)])
+        outputs = set([key.name.split("/")[-2] for key in S3.list(prefix="output/" + user_id + "/" + user_key)])
 
         # optionally paginate results
         if request.args.get("max_results"):
@@ -296,10 +269,10 @@ def get_twitter():
 def queue(task_id):
     """This endpoint is where clients poll to find the status of their jobs."""
     # Extract and validate credentials. 
-    app_id, app_key = check_credentials()
+    user_id, user_key = check_credentials()
 
     # Get status from Redis.
-    status = get_status(app_id, app_key, task_id)
+    status = get_status(user_id, user_key, task_id)
 
     # Build the response.
     data = {"status": "success",
@@ -341,13 +314,13 @@ def queue(task_id):
 def list_results(task_id):
     """This endpoint lists the locations of the results."""
     # Extract and validate credentials. Verify that the job is done.
-    app_id, app_key, status = check_credentials_and_status(task_id)
+    user_id, user_key, status = check_credentials_and_status(task_id)
 
     # Get the list of outputs for this task id
-    # outputs = [key for key in S3.list(prefix="output/" + make_key(app_id, app_key, task_id)) if key.content_type == "text/csv"]
-    outputs = [key for key in S3.list(prefix="output/" + make_key(app_id, app_key, task_id)) if key.name[-3:] == "csv"]
+    # outputs = [key for key in S3.list(prefix="output/" + make_key(user_id, user_key, task_id)) if key.content_type == "text/csv"]
+    outputs = [key for key in S3.list(prefix="output/" + make_key(user_id, user_key, task_id)) if key.name[-3:] == "csv"]
     # outputs = []
-    # [outputs.append(key) for key in S3.list(prefix="output/" + make_key(app_id, app_key, task_id))]
+    # [outputs.append(key) for key in S3.list(prefix="output/" + make_key(user_id, user_key, task_id))]
 
     if len(outputs) == 0:
         app.logger.error("From list_results, document was complete but cannot find files!")
@@ -372,9 +345,9 @@ def list_results(task_id):
 def get_file(task_id, name):
     """Helper function for spitting out a file on s3"""
     # Validate credentials and check status
-    app_id, app_key, status = check_credentials_and_status(task_id)
-    key = "output/" + make_key(app_id, app_key, task_id) + "/" + name
-    app.logger.info("Results delivered. name: %s, app_id: %s, task_id: %s", name, app_id, task_id)
+    user_id, user_key, status = check_credentials_and_status(task_id)
+    key = "output/" + make_key(user_id, user_key, task_id) + "/" + name
+    app.logger.info("Results delivered. name: %s, user_id: %s, task_id: %s", name, user_id, task_id)
     # Return results directly from s3
     return S3.get_key(key).get_contents_as_string(), 200
 
