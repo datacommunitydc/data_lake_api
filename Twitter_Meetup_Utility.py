@@ -14,6 +14,7 @@ import pandas as pd
 
 # Will also use the json library. 
 import json
+import ujson
 
 # python-twitter library
 # you can obtain this by using pip python-twitter
@@ -23,11 +24,16 @@ import twitter
 # library that makes requests easy to do
 import requests
 import ast
+import decimal
 
-from config import *
+# from config import *
+from tem_config import *
+API_KEY = API_KEYS['DC2']
 
+API_ROOT = 'https://api.meetup.com/'
+MEETUP_API_FAIL = 'Failed Response'
 
-def GetGroupID(GroupID):
+def GetGroupID(GroupName):
     '''
     Most people know the name, not the ID
 
@@ -36,14 +42,18 @@ def GetGroupID(GroupID):
     '''
 
     # Check to see if they gave the url string, if so then go get the numeric ID
-    if isinstance(GroupID,basestring):
+    if isinstance(GroupName,basestring):
         # Try DC2 S3/Mongo first
         ### PLACEHOLDER ###
-        response = requests.get( API_ROOT + GroupID + "?key=" + API_KEY)
-        grp_res = Eval_Response(response)
-        gid = grp_res['id']
+        endpoint = API_ROOT + GroupName + "?sign=true&key=" + API_KEY
+        response = requests.get( endpoint )
+        grp_res = Eval_Response( response )
+        if grp_res==MEETUP_API_FAIL:
+            gid = -1
+        else:
+            gid = grp_res['id']
     else:
-        gid = GroupID
+        gid = GroupName
 
     return gid
 
@@ -61,8 +71,10 @@ def GetGroupOpenData(GroupID):
     gid = GetGroupID(GroupID)
 
     #This is simplified using the python requests library
-    response = requests.get( API_ROOT + "2/groups?key="+ API_KEY +"&group_id="+ str(gid))
-    return Eval_Response(response)
+    endpoint = API_ROOT + "/2/groups?key="+ API_KEY +"&group_id="+ str(gid)
+    response = requests.get( endpoint )
+    data_res = Eval_Response(response)
+    return data_res
 
 def GetGroupReviews(GroupID):
 
@@ -72,10 +84,67 @@ def GetGroupReviews(GroupID):
     return Eval_Response(response)
 
 def Eval_Response(response):
-    if (response.status_code >200) & (response.status_code < 299):
-        return ast.literal_eval(response.text)
+    if (response.status_code >=200) & (response.status_code <= 299):
+        return ujson.loads( response.text )
+        # return ParseResponse(response.text)
+        # return ast.literal_eval(response.text)
     else:
-        return "Failed Response" # Need error handling.
+        return MEETUP_API_FAIL # Need error handling.
+
+def ParseResponse(source):
+
+    # source = "(Decimal('11.66985'), Decimal('1e-8'),"\
+    #     "(1,), (1,2,3), 1.2, [1,2,3], {1:2})"
+
+    tree = ast.parse(source, mode='eval')
+
+    # using the NodeTransformer, you can also modify the nodes in the tree,
+    # however in this example NodeVisitor could do as we are raising exceptions
+    # only.
+    class Transformer(ast.NodeTransformer):
+        ALLOWED_NAMES = set(['Decimal', 'None', 'False', 'True'])
+        ALLOWED_NODE_TYPES = set([
+            'Expression', # a top node for an expression
+            'Tuple',      # makes a tuple
+            'Call',       # a function call (hint, Decimal())
+            'Name',       # an identifier...
+            'Load',       # loads a value of a variable with given identifier
+            'Str',        # a string literal
+
+            'Num',        # allow numbers too
+            'List',       # and list literals
+            'Dict',       # and dicts...
+        ])
+
+        def visit_Name(self, node):
+            if not node.id in self.ALLOWED_NAMES:
+                raise RuntimeError("Name access to %s is not allowed" % node.id)
+
+            # traverse to child nodes
+            return self.generic_visit(node)
+
+        def generic_visit(self, node):
+            nodetype = type(node).__name__
+            if nodetype not in self.ALLOWED_NODE_TYPES:
+                raise RuntimeError("Invalid expression: %s not allowed" % nodetype)
+
+            return ast.NodeTransformer.generic_visit(self, node)
+
+
+    transformer = Transformer()
+
+    # raises RuntimeError on invalid code
+    transformer.visit(tree)
+
+    # compile the ast into a code object
+    clause = compile(tree, '<AST>', 'eval')
+
+    # make the globals contain only the Decimal class,
+    # and eval the compiled object
+    result = eval(clause, dict(Decimal=decimal.Decimal))
+
+    print(result)
+    return result
 
 def GetGroupMembers(GroupID):
     '''
@@ -86,16 +155,48 @@ def GetGroupMembers(GroupID):
     '''
     gid = GetGroupID(GroupID)
 
-    response = requests.get( API_ROOT + "2/members?key=" + API_KEY +"&group_id="+ str(gid))
-    members = Eval_Response(response)
+    endpoint = API_ROOT + "/2/members?key=" + API_KEY +"&group_id="+ str(gid)
+    response = requests.get( endpoint )
+    members = Eval_Response( response )
+    return members
 
     # What do I want to do with this? I'd say the first step is just storing all this stuff so we can do whatever calls we want.
 
-def GetGroupEvents(GroupID):
+def GetGroupUpcomingEvents(GroupID):
+    '''
+    Will return events coming up, not old events.
+
+    :param GroupID:
+    :return:
+    '''
+    # http://www.meetup.com/meetup_api/docs/2/groups/
+    gid = GetGroupID(GroupID)
+    endpoint = API_ROOT + "2/events?key=" + API_KEY +"&group_id="+ str(gid)
+    response = requests.get( endpoint )
+    event_res = Eval_Response(response)
+    return event_res
+
+def GetGroupEvent(GroupID,EventID):
 
     gid = GetGroupID(GroupID)
-    response = requests.get( API_ROOT + "2/events?key=" + API_KEY +"&group_id="+ str(gid))
-    return Eval_Response(response)
+    endpoint = API_ROOT + str(GroupID) + "/events/" + str(EventID)
+    # https://api.meetup.com/dcnightowls/events/227458852?&sign=true&photo-host=public
+    response = requests.get( endpoint )
+    event_res = Eval_Response(response)
+    return event_res
+
+def GetGroupMemberComments(GroupID,MemberID=None):
+
+    # GET String
+    if isinstance(GroupID,str):
+        GroupID = GetGroupID(GroupID)
+
+    endpoint = API_ROOT + "/2/event_comments?key=" + API_KEY + "&group_id=" + str(GroupID)
+    if MemberID!=None:
+        endpoint += "&member_id=" + str(MemberID)
+    response = requests.get( endpoint )
+    comment_res = Eval_Response(response)
+    return comment_res
 
 def GatherGroupData():
 
@@ -113,6 +214,17 @@ def GatherGroupData():
     SaveMemberData(group_members)
     SaveGroupReviews(group_reviews)
     SaveGroupEvents(group_events)
+
+def GetMemberEventData(MemberID,EventID):
+    '''
+    Created initially as part of ranking members for rsvp vs waitlist at events
+
+    :param MemberID:
+    :return:
+    '''
+    # http://www.meetup.com/meetup_api/docs/:urlname/events/:event_id/comments/#list - member
+    response = requests.get( API_ROOT + "2/events/" + str(EventID) + "?key=" + API_KEY +"&group_id="+ str(gid))
+    return member_group_data
 
 def SaveGroupData(group_data):
     '''
@@ -159,11 +271,16 @@ def CreateMemberConnections():
 
     gmems = GetGroupMembersDC2(gid)
     gmems_keys = gmems.keys()
+    gmem_matrix = []
     for m1,gmem1 in enumerate(gmems_keys):
         for m2,gmem2 in enumerate(gmems_keys):
+            # The goal is to show how members are connected in different ways, allowing for an organic search
+            if True:
+                gmem_matrix.append((m1,m2))
 
+    return gmem_matrix
 
-    SaveMemberConnections()
+    # SaveMemberConnections()
 
 def RankMemberByKeyword(topic):
     '''
@@ -176,6 +293,60 @@ def RankMemberByKeyword(topic):
     :param keyword:
     :return:
     '''
+
+def RankMemberByActivity(GroupName,EventID=None):
+    '''
+    Meetup events are challenged by their RSVP's because it's unclear who will show up when.
+    Some venues, such as Chief, FI Consulting, Capital One Labs, etc., require a rsvp list to allow people in at the door.
+    Some venues do not want to turn away people as it creates resentment to the organization.
+    Ranking options could be:
+      1. User's friends at local events: If the user is well connected, treat them well.
+        > http://www.meetup.com/meetup_api/docs/2/member/#get - facebook_connection
+
+      2. Number of active memberships: If the user is very active, keep them around.
+        > http://www.meetup.com/meetup_api/docs/2/member/#get - membership_count
+
+      3. Topics: If the user shares many of the same topics, they're likely to attend.
+        > http://www.meetup.com/meetup_api/docs/2/member/#get - topics
+
+      4. Active Member in Group: Do they check the message board? Read materials? Include them!
+        > http://www.meetup.com/meetup_api/docs/:urlname/events/:event_id/comments/#list - member
+        > http://www.meetup.com/meetup_api/docs/:urlname/#get - member_sample
+        > http://www.meetup.com/meetup_api/docs/members/:member_id/#get - group_profile
+
+    :param members:
+    :return:
+    '''
+
+    gid = GetGroupID(GroupName)
+    members = GetGroupMembers(gid)
+    events = GetGroupEvents(gid)
+
+    for event in events:
+        edata = GetEventData(event['id'])
+        eid = edata['']
+
+    dc2members = {}
+    for member in members:
+        mid = member['id']
+        dc2members[str(mid)] = {}
+
+        mactive_count = member['membership_count']
+        mtopics = member['topics']
+        mname = member['name']
+        mservices = member['other_services']
+
+        mevent_data = GetMemberEventData(mid,eid)
+
+        dc2members[str(mid)]['active_count'] = mactive_count
+        dc2members[str(mid)]['topics'] = mtopics
+        dc2members[str(mid)]['name'] = mname
+        dc2members[str(mid)]['services'] = mservices
+        dc2members[str(mid)]['event_data'] = mevent_data
+
+
+
+
 
 #=======================================================================================================================
 # This Function takes in a parameter as a screenname and then writes a json file
