@@ -15,6 +15,10 @@ import pandas as pd
 # Will also use the json library. 
 import json
 import ujson
+import uuid
+import cPickle as pkl
+import os
+import time
 
 # python-twitter library
 # you can obtain this by using pip python-twitter
@@ -26,6 +30,10 @@ import requests
 import ast
 import decimal
 
+from datetime import datetime
+
+import numpy as np
+
 # from config import *
 from tem_config import *
 API_KEY = API_KEYS['DC2']
@@ -33,6 +41,9 @@ API_KEY = API_KEYS['DC2']
 API_ROOT = 'https://api.meetup.com/'
 MEETUP_API_FAIL = 'Failed Response'
 
+#====================================================================================================
+# BEGIN ENDPOINT FUNCTIONS BEGIN ENDPOINT FUNCTIONS BEGIN ENDPOINT FUNCTIONS BEGIN ENDPOINT FUNCTIONS
+#====================================================================================================
 def GetGroupID(GroupName):
     '''
     Most people know the name, not the ID
@@ -146,34 +157,112 @@ def ParseResponse(source):
     print(result)
     return result
 
-def GetGroupMembers(GroupID):
+def GetEventRSVPs(EventID):
+    '''
+    Uses the RSVP endpoint, meant to rank everyone in an event (as opposed to the entire group)
+    https://api.meetup.com/2/rsvps?&event_id=227834443
+
+    :param EventID: if the name isn't descriptive enough, you shouldn't be coding.
+    :return:
+    '''
+    if isinstance(EventID,int):
+        endpoint = API_ROOT + "2/rsvps?&event_id=" + str(EventID)
+        rsvp_res = Eval_Response( requests.get( endpoint ))
+    else:
+        rsvp_res = "Bad Event ID"
+
+    return rsvp_res
+
+def LoadGroupMembers(GroupURL):
+
+    files = os.listdir('.')
+    potential_files = []
+    for filename in files:
+        if GroupURL in filename:
+            potential_files += [filename]
+
+    if len(potential_files)>0:
+        best_time = 0
+        for this in potential_files:
+            mod_time = time.ctime(os.path.getmtime(this))
+            if mod_time > best_time:
+                best_time = mod_time
+                load_this = this
+            # print "last modified: %s" % time.ctime(os.path.getmtime(file))
+            # print "created: %s" % time.ctime(os.path.getctime(file))
+
+    members = LoadPickle(load_this)
+    return members
+
+def GetGroupMembers(GroupID,OffsetLimit=1,Page=None):
     '''
     Mimics the Meetup API endpoint: https://secure.meetup.com/meetup_api/console/?path=/2/members
+    We are currently not saving the meta data for expediency of development
+        and because there is no immediate application.
 
-    :param GroupID:
+    :param GroupID: Either the urlname or numeric ID
+    :param OffsetLimit: Tells meetup which index to begin pulling the next X members from
     :return:
     '''
     gid = GetGroupID(GroupID)
 
     endpoint = API_ROOT + "/2/members?key=" + API_KEY +"&group_id="+ str(gid)
-    response = requests.get( endpoint )
-    members = Eval_Response( response )
+    potentially_more = True
+    offset = 0
+    members = []
+    while (potentially_more & (offset<OffsetLimit)):
+        offpoint = endpoint + "&offset=" + str(offset)
+        # if Page!=None:
+        #     offpoint += "&page=" + str(Page)
+        response = Eval_Response( requests.get( offpoint ))
+        batch = response['results']
+        if len(batch)>0:
+            # We are currently not saving the meta data for expediency of development
+            #   and because there is no immediate application.
+            members += batch
+            offset += 1
+            if DEBUG:
+                print("Offset = "+str(offset)+" More Members yet...")
+        else:
+            potentially_more = False
+            if DEBUG:
+                print("Done pulling the members!")
     return members
 
     # What do I want to do with this? I'd say the first step is just storing all this stuff so we can do whatever calls we want.
 
-def GetGroupUpcomingEvents(GroupID):
+def GetMemberGroups(MemberID):
     '''
-    Will return events coming up, not old events.
+    Initially used to determine the number of groups they're a member of versus the number they're active in
+    :param MemberID:
+    :return:
+    '''
+    # https://api.meetup.com/members/12511409?&sign=true&photo-host=public&fields=memberships&page=20
+    endpoint = API_ROOT + "members/" + str(MemberID) + "?fields=memberships"
+    event_res = Eval_Response( requests.get( endpoint ))
+    return event_res
 
-    :param GroupID:
+def GetGroupEvents(GroupID,Time=-1,Status=None):
+    '''
+
+    :param GroupID: url or id of the meetup group
+    :param Time: string or array:
+        string may have one number (e.g. 9), or string may be two numbers (e.g. 0,9)
+        array may have length 1 or 2.
+            Length 1 contains a string (e.g. 0,9),
+            Length 2 contains begin and end time in milliseconds since epoch [0,9] NO DECIMALS!
+    :param Status:
     :return:
     '''
     # http://www.meetup.com/meetup_api/docs/2/groups/
     gid = GetGroupID(GroupID)
     endpoint = API_ROOT + "2/events?key=" + API_KEY +"&group_id="+ str(gid)
-    response = requests.get( endpoint )
-    event_res = Eval_Response(response)
+    if ((Status!=None) & (Time!=-1)):
+        endpoint += "&time=" + str(Time[0])
+        if len(Time)>1:
+            endpoint += "," + str(int(Time[1]))
+        endpoint += "&status=" + str(Status)
+    event_res = Eval_Response( requests.get( endpoint ))
     return event_res
 
 def GetGroupEvent(GroupID,EventID):
@@ -184,6 +273,26 @@ def GetGroupEvent(GroupID,EventID):
     response = requests.get( endpoint )
     event_res = Eval_Response(response)
     return event_res
+
+def GetMemberEventRSVPs(MemberID,Time=-1,Status=None):
+    # https://api.meetup.com/2/events?&sign=true&photo-host=public&group_id=6957082&member_id=12511409&time=0,1450815009391&status=past
+    endpoint = API_ROOT + "2/events?member_id=" + str(MemberID)
+    if ((Status!=None) & (Time!=-1)):
+        endpoint += "&time=" + str(Time[0])
+        if len(Time)>1:
+            endpoint += "," + str(int(Time[1]))
+        endpoint += "&status=" + str(Status)
+    rsvps = Eval_Response( requests.get( endpoint ))
+    return rsvps
+
+def GetMemberData(MemberID):
+    # 1. User's friends at local events: If the user is well connected, treat them well.
+    #   > http://www.meetup.com/meetup_api/docs/2/member/#get - facebook_connection
+    # Endpoint: https://api.meetup.com/2/member/146282552
+    endpoint = API_ROOT + "2/member/" + str(MemberID) + "?key=" + API_KEY
+    response = requests.get( endpoint )
+    mem_res = Eval_Response(response)
+    return mem_res
 
 def GetGroupMemberComments(GroupID,MemberID=None):
 
@@ -198,23 +307,6 @@ def GetGroupMemberComments(GroupID,MemberID=None):
     comment_res = Eval_Response(response)
     return comment_res
 
-def GatherGroupData():
-
-    group_data = {}
-    group_members = {}
-    group_reviews = {}
-    group_events = {}
-    for g,gurl in enumerate(DC2_PROGRAMS):
-        group_data[gurl] = GetGroupOpenData(gurl)
-        group_members[gurl] = GetGroupMembers(gurl)
-        group_reviews[gurl] = GetGroupReviews(gurl)
-        group_events[gurl] = GetGroupEvents(gurl)
-
-    SaveGroupData(group_data)
-    SaveMemberData(group_members)
-    SaveGroupReviews(group_reviews)
-    SaveGroupEvents(group_events)
-
 def GetMemberEventData(MemberID,EventID):
     '''
     Created initially as part of ranking members for rsvp vs waitlist at events
@@ -226,13 +318,33 @@ def GetMemberEventData(MemberID,EventID):
     response = requests.get( API_ROOT + "2/events/" + str(EventID) + "?key=" + API_KEY +"&group_id="+ str(gid))
     return member_group_data
 
-def SaveGroupData(group_data):
+#====================================================================================================
+# END ENDPOINT FUNCTIONS END ENDPOINT FUNCTIONS END ENDPOINT FUNCTIONS END ENDPOINT FUNCTIONS
+#====================================================================================================
+# BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING
+#====================================================================================================
+
+def SaveGroupMembers(group_url,OFFSET=1):
     '''
     Save to S3 or a Mongo Database
 
     :param group_data:
     :return:
     '''
+
+    members = GetGroupMembers(group_url,OffsetLimit=OFFSET)
+
+    id = str(uuid.uuid1())
+    filename = group_url + '_api_2_members.' + id + '.pkl'
+    f = file(filename,'wb')
+    pkl.dump(members,f,protocol=pkl.HIGHEST_PROTOCOL)
+    f.close()
+    print("Saved Group Member Data")
+
+def LoadPickle(filename):
+    f = file(filename,'rb')
+    data = pkl.load(f)
+    return data
 
 def SaveMemberData(group_members):
     '''
@@ -258,6 +370,29 @@ def SaveGroupEvents(group_events):
     :return:
     '''
 
+#====================================================================================================
+# END S3 SAVING END S3 SAVING END S3 SAVING END S3 SAVING END S3 SAVING END S3 SAVING
+#====================================================================================================
+# BEGIN AGGREGATION FUNCTIONS BEGIN AGGREGATION FUNCTIONS BEGIN AGGREGATION FUNCTIONS
+#====================================================================================================
+
+def GatherGroupData():
+
+    group_data = {}
+    group_members = {}
+    group_reviews = {}
+    group_events = {}
+    for g,gurl in enumerate(DC2_PROGRAMS):
+        group_data[gurl] = GetGroupOpenData(gurl)
+        group_members[gurl] = GetGroupMembers(gurl)
+        group_reviews[gurl] = GetGroupReviews(gurl)
+        group_events[gurl] = GetGroupEvents(gurl)
+
+    SaveGroupData(group_data)
+    SaveMemberData(group_members)
+    SaveGroupReviews(group_reviews)
+    SaveGroupEvents(group_events)
+
 def CreateMemberConnections():
     '''
     Get data from DC2 S3/database and create member associations.
@@ -282,19 +417,7 @@ def CreateMemberConnections():
 
     # SaveMemberConnections()
 
-def RankMemberByKeyword(topic):
-    '''
-    When we search for a subject, we are interested in people that:
-    1. Attend events with that topic
-    2. Attend events we attend
-    3. Have the topic in Meetup topics
-    4. Have the topic in Group Description or Overall Description
-
-    :param keyword:
-    :return:
-    '''
-
-def RankMemberByActivity(GroupName,EventID=None):
+def RankMemberByActivity(GroupName,Test=False):
     '''
     Meetup events are challenged by their RSVP's because it's unclear who will show up when.
     Some venues, such as Chief, FI Consulting, Capital One Labs, etc., require a rsvp list to allow people in at the door.
@@ -302,6 +425,7 @@ def RankMemberByActivity(GroupName,EventID=None):
     Ranking options could be:
       1. User's friends at local events: If the user is well connected, treat them well.
         > http://www.meetup.com/meetup_api/docs/2/member/#get - facebook_connection
+        > FAIL: facebook_connection, if it is returned, only gives status.
 
       2. Number of active memberships: If the user is very active, keep them around.
         > http://www.meetup.com/meetup_api/docs/2/member/#get - membership_count
@@ -314,39 +438,207 @@ def RankMemberByActivity(GroupName,EventID=None):
         > http://www.meetup.com/meetup_api/docs/:urlname/#get - member_sample
         > http://www.meetup.com/meetup_api/docs/members/:member_id/#get - group_profile
 
+      5. First time: If this is their first RSVP, let'em in
+
+      6. Have they ever contributed money? let'em in!!
+
     :param members:
     :return:
+
+    Note: Perhaps use meetup api batch processing?
     '''
 
     gid = GetGroupID(GroupName)
-    members = GetGroupMembers(gid)
-    events = GetGroupEvents(gid)
 
-    for event in events:
-        edata = GetEventData(event['id'])
-        eid = edata['']
+    # Calculations can not also be calling the meetup api, it's just too inefficient.
+    members = LoadGroupMembers(GroupName)
+    # members = GetGroupMembers(gid,OffsetLimit=1,Page=3)
 
-    dc2members = {}
+    mem_vec = CalcMemberVector(members,gid)
+
+    # topic_matrix = CalcTopicAssociations(mem_vec)
+    group_matrix = CalcGroupAssociations(mem_vec)
+    import matplotlib.pyplot as plt
+    # plt.matshow(topic_matrix)
+    plt.matshow(group_matrix)
+
+    # Rank the members using the member-vector and association matrices
+
+    # Could loop through all members and their their events?
+    # events = GetGroupEvents(gid,[0,from_epoch],Status="past")
+    # for event in events['results']:
+    #     eid = event['id']
+    #     edata = GetGroupEvent(gid,eid)
+
+def CalcMemberVector(members,gid):
+    '''
+    The Member Vector is all the information pertinent to the Member ranking algroithm. It consists of:
+    1. Member's comments at events
+    2. Number of Active Groups
+    3. Number of common Groups
+    4. Number of common Topics
+    5. Number of RSVP's
+    6. Meetup active status
+
+    :param members:
+    :param gid:
+    :return:
+    '''
+
+    epoch = datetime.utcfromtimestamp(0)
+    now = datetime.utcnow()
+    from_epoch = (now-epoch).total_seconds() *1000
+
+    mem_vec = {}
+
+    mem_comments = GetGroupMemberComments(gid)
+    print("Got Member Comments")
+
     for member in members:
+        meys = member.keys()
         mid = member['id']
-        dc2members[str(mid)] = {}
+        mem_vec[mid] = {}
 
-        mactive_count = member['membership_count']
-        mtopics = member['topics']
-        mname = member['name']
-        mservices = member['other_services']
+        # Do they participate in recent event conversations?
+        mem_vec[mid]['status'] = member['status']
+        mem_vec[mid]['commented'] = 0
+        for comment in mem_comments['results']:
+            if mid == comment['member_id']:
+                mem_vec[mid]['commented'] += 1
+                if mem_vec[mid]['commented'] >=3:
+                    break
 
-        mevent_data = GetMemberEventData(mid,eid)
+        # Membership count gives the number of groups they're active in
+        if "membership_count" in meys:
+            mem_vec[mid]['membership_count'] = member['membership_count']
+        else:
+            mem_vec[mid]['membership_count'] = 0
 
-        dc2members[str(mid)]['active_count'] = mactive_count
-        dc2members[str(mid)]['topics'] = mtopics
-        dc2members[str(mid)]['name'] = mname
-        dc2members[str(mid)]['services'] = mservices
-        dc2members[str(mid)]['event_data'] = mevent_data
+        # How many common groups?
+        # https://secure.meetup.com/meetup_api/console/?path=/members/:member_id
+        moups = GetMemberGroups(mid)
+        print("Got member Groups")
+        mgkeys = moups.keys()
+        if "memberships" in mgkeys:
+            mem_vec[mid]['groups'] = {'id':[],'urlname':[],'organizer':[]} # Initialize
 
+            # Distinguish between Organizer and Member
+            organizer_member = moups['memberships'].keys()
+            if "organizer" in organizer_member:
+                # PUT SOME VALUE HERE SO I SIDESTEP A GROUP ASSOCIATION MATRIX BECAUSE ORGANIZERS ARE AWESOME??
+                memberships = moups["memberships"]["organizer"]
+                mem_vec[mid]['groups']['id'] += [group['group']['id'] for group in memberships]
+                mem_vec[mid]['groups']['urlname'] += [group['group']['id'] for group in memberships]
+                mem_vec[mid]['groups']['organizer'] += [True] * len(memberships)
 
+            if "member" in organizer_member:
+                memberships = moups["memberships"]["member"]
+                mem_vec[mid]['groups']['id'] += [group['group']['id'] for group in memberships]
+                mem_vec[mid]['groups']['urlname'] += [group['group']['id'] for group in memberships]
+                mem_vec[mid]['groups']['organizer'] += [False] * len(memberships)
 
+        # How many common topics? So much easier than the groups...
+        mem_vec[mid]['topics'] = member['topics']
 
+        # Have they RSVP'd to any events?
+        mem_rsvps = GetMemberEventRSVPs(mid,Time=[0,from_epoch],Status="past")
+        print("Got member events")
+        mem_vec[mid]['rsvps'] = 0
+        for event in mem_rsvps['results']:
+            if event['group']['id'] == gid:
+                mem_vec[mid]['rsvps'] += 1
+                if mem_vec[mid]['rsvps'] >=3:
+                    break
+
+        # MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!!
+        # MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!!
+        # This is a part of the user's group profile, and membership dues are tracked, but contributions are not.
+        # https://secure.meetup.com/meetup_api/console/?path=/2/profile/:gid/:mid
+        # TO GET CONTRIBUTIONS, WE WOULD HAVE TO SCRAPE THIS PAGE:
+        #             http://www.meetup.com/dcnightowls/money/
+
+    return mem_vec
+
+def CalcGroupAssociations(mem_vec):
+
+    mids = mem_vec.keys()
+    num_mems = len(mids)
+    group_matrix = np.zeros([num_mems,num_mems])
+    for r,midr in enumerate(mids):
+        print("Member #" + str(midr))
+        for c,midc in enumerate(mids):
+            if (c>r) & ('groups' in mem_vec[midr]) & ('groups' in mem_vec[midc]):
+                # Intersection of common topics
+                group_matrix[r,c] = len(np.intersect1d( np.array(mem_vec[midr]['groups']['id']),
+                                                        np.array(mem_vec[midc]['groups']['id'])))
+            else:
+                group_matrix[r,c] = 0
+
+    return group_matrix
+
+def CalcTopicAssociations(mem_vec):
+
+    mids = mem_vec.keys()
+    num_mems = len(mids)
+    topic_matrix = np.zeros([num_mems,num_mems]) # [[0 for x in range(num_mems)] for y in range(num_mems)]
+    for r,midr in enumerate(mids):
+        for c,midc in enumerate(mids):
+            if c>r:
+                # Intersection of common topics
+                topic_matrix[r,c] = len(np.intersect1d( np.array(mem_vec[midr]['topics']),
+                                                        np.array(mem_vec[midc]['topics'])))
+            else:
+                topic_matrix[r,c] = 0
+
+    return topic_matrix
+
+#=======================================================================================================================
+# ENOUGH CALCULATING, ACT! ENOUGH CALCULATING, ACT! ENOUGH CALCULATING, ACT! ENOUGH CALCULATING, ACT! ENOUGH CALCULATING, ACT!
+# ENOUGH CALCULATING, ACT! ENOUGH CALCULATING, ACT! ENOUGH CALCULATING, ACT! ENOUGH CALCULATING, ACT! ENOUGH CALCULATING, ACT!
+#=======================================================================================================================
+
+def RankMemberByKeyword(topic):
+    '''
+    When we search for a subject, we are interested in people that:
+    1. Attend events with that topic
+    2. Attend events we attend
+    3. Have the topic in Meetup topics
+    4. Have the topic in Group Description or Overall Description
+
+    :param keyword:
+    :return:
+    '''
+
+def GroupCommentWordCloud(GroupID,TFIDF=False):
+    '''
+    Calculate the frequency of each word for all of a group's events.
+
+    :param GroupID:
+    :param TFIDF:
+    :return:
+    '''
+
+def RankEventRSVPs(EventID):
+    '''
+    Take the results of the member rankings and apply them to a specific event.
+
+    :param EventID:
+    :return:
+    '''
+
+    # get the members' ranks, update the event with the right key.
+    # NONE OF THESE ARE WRITTEN YET!!!
+    rsvps = GetEventRSVPs(EventID)
+    mids = ExtractRSVPmembers(rsvps)
+    ranking = GetMemberRanking(mids)
+
+def CleanGroupMemberships(GroupID):
+    '''
+    So many people sign up and ultimately do nothing. They skew the stats, bootem.
+
+    :param GroupID:
+    :return:
+    '''
 
 #=======================================================================================================================
 # This Function takes in a parameter as a screenname and then writes a json file
