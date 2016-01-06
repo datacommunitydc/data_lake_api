@@ -157,6 +157,90 @@ def ParseResponse(source):
     print(result)
     return result
 
+#====================================================================================================
+# BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING
+#====================================================================================================
+
+def SavePickle(save_data,endpoint_string,endpoint_input,PRINT='Saved Data'):
+    '''
+    Each of the endpoints needs to pickle the data is a similar way.
+
+    :return:
+    '''
+
+    result = False
+    id = str(uuid.uuid1())
+    filename = str(endpoint_input) + str(endpoint_string) + '.' + id + '.pkl'
+    f = file(filename,'wb')
+    pkl.dump(save_data,f,protocol=pkl.HIGHEST_PROTOCOL)
+    f.close()
+    if DEBUG:
+        print(PRINT)
+
+    result = True # asserting the save will make this conditional
+    return result
+
+def LoadPickle(filename):
+    f = file(filename,'rb')
+    data = pkl.load(f)
+    return data
+
+def LoadAPI(keyword,Directory='.'):
+    '''
+    We need to load everything and save it before sciencing it.
+
+    :param MemberID:
+    :return:
+    '''
+
+    files = os.listdir(Directory)
+    potential_files = []
+    for filename in files:
+        if keyword in filename:
+            potential_files += [filename]
+
+    # If something matched the keyword, load the latest one.
+    if len(potential_files)>0:
+        best_time = 0
+        for this in potential_files:
+            mod_time = time.ctime(os.path.getmtime(this))
+            if mod_time > best_time:
+                best_time = mod_time
+                load_this = this
+            # print "last modified: %s" % time.ctime(os.path.getmtime(file))
+            # print "created: %s" % time.ctime(os.path.getctime(file))
+
+    data = LoadPickle(load_this)
+    return data
+
+def SaveMemberData(group_members):
+    '''
+    Save to S3 or a Mongo Database
+
+    :param group_members:
+    :return:
+    '''
+
+def SaveGroupReviews(group_reviews):
+    '''
+    Save to S3 or a Mongo Database
+
+    :param group_reviews:
+    :return:
+    '''
+
+def SaveGroupEvents(group_events):
+    '''
+    Save to S3 or a Mongo Database
+
+    :param group_reviews:
+    :return:
+    '''
+
+#====================================================================================================
+# END S3 SAVING END S3 SAVING END S3 SAVING END S3 SAVING END S3 SAVING END S3 SAVING
+#====================================================================================================
+
 def GetEventRSVPs(EventID):
     '''
     Uses the RSVP endpoint, meant to rank everyone in an event (as opposed to the entire group)
@@ -173,26 +257,7 @@ def GetEventRSVPs(EventID):
 
     return rsvp_res
 
-def LoadGroupMembers(GroupURL):
-
-    files = os.listdir('.')
-    potential_files = []
-    for filename in files:
-        if GroupURL in filename:
-            potential_files += [filename]
-
-    if len(potential_files)>0:
-        best_time = 0
-        for this in potential_files:
-            mod_time = time.ctime(os.path.getmtime(this))
-            if mod_time > best_time:
-                best_time = mod_time
-                load_this = this
-            # print "last modified: %s" % time.ctime(os.path.getmtime(file))
-            # print "created: %s" % time.ctime(os.path.getctime(file))
-
-    members = LoadPickle(load_this)
-    return members
+#-----------------------------------------------------------------------------------------------------------------------
 
 def GetGroupMembers(GroupID,OffsetLimit=1,Page=None):
     '''
@@ -231,6 +296,32 @@ def GetGroupMembers(GroupID,OffsetLimit=1,Page=None):
 
     # What do I want to do with this? I'd say the first step is just storing all this stuff so we can do whatever calls we want.
 
+def SaveGroupMembers(group_url,OFFSET_LIMIT=1):
+    '''
+    Save to S3 or a Mongo Database
+
+    :param group_data:
+    :return:
+    '''
+
+    members = GetGroupMembers(group_url,OffsetLimit=OFFSET_LIMIT)
+
+    SavePickle(members,'_api_2_members',group_url,PRINT="Saved Group Member Data")
+
+    return members
+
+def LoadGroupMembers(GroupURL,Directory='.'):
+    '''
+    These are placeholders right now, I imagine they may get more complicated.
+
+    :param GroupURL:
+    :param Directory:
+    :return:
+    '''
+    return LoadAPI(str(GroupURL),Directory=Directory)
+
+#-----------------------------------------------------------------------------------------------------------------------
+
 def GetMemberGroups(MemberID):
     '''
     Initially used to determine the number of groups they're a member of versus the number they're active in
@@ -241,6 +332,32 @@ def GetMemberGroups(MemberID):
     endpoint = API_ROOT + "members/" + str(MemberID) + "?fields=memberships"
     event_res = Eval_Response( requests.get( endpoint ))
     return event_res
+
+def SaveMemberGroups(MemberID):
+    '''
+    Save to S3 or a Mongo Database
+
+    :param group_data:
+    :return:
+    '''
+
+    groups = GetMemberGroups(MemberID)
+
+    SavePickle(groups,'_api_members_id_memberships',MemberID,PRINT="Saved Member Group Data")
+
+    return groups
+
+def LoadMemberGroups(MemberID,Directory='.'):
+    '''
+    We need to load everything and save it before sciencing it.
+
+    :param MemberID:
+    :return:
+    '''
+
+    return LoadAPI(str(MemberID),Directory=Directory)
+
+#-----------------------------------------------------------------------------------------------------------------------
 
 def GetGroupEvents(GroupID,Time=-1,Status=None):
     '''
@@ -274,6 +391,8 @@ def GetGroupEvent(GroupID,EventID):
     event_res = Eval_Response(response)
     return event_res
 
+#-----------------------------------------------------------------------------------------------------------------------
+
 def GetMemberEventRSVPs(MemberID,Time=-1,Status=None):
     # https://api.meetup.com/2/events?&sign=true&photo-host=public&group_id=6957082&member_id=12511409&time=0,1450815009391&status=past
     endpoint = API_ROOT + "2/events?member_id=" + str(MemberID)
@@ -285,6 +404,32 @@ def GetMemberEventRSVPs(MemberID,Time=-1,Status=None):
     rsvps = Eval_Response( requests.get( endpoint ))
     return rsvps
 
+def SaveMemberEventRSVPs(MemberID,Time=-1,Status=None):
+    '''
+    Save to S3 or a Mongo Database
+
+    :param group_data:
+    :return:
+    '''
+
+    rsvps = GetMemberEventRSVPs(MemberID,Time=-1,Status=Status)
+
+    SavePickle(rsvps, '_api_2_events',MemberID,PRINT="Saved Member Event RSVPs")
+
+    return rsvps
+
+def LoadMemberEventRSVPs(MemberID,Directory='.'):
+    '''
+    These are placeholders right now, I imagine they may get more complicated.
+
+    :param GroupURL:
+    :param Directory:
+    :return:
+    '''
+    return LoadAPI(str(MemberID),Directory=Directory)
+
+#-----------------------------------------------------------------------------------------------------------------------
+
 def GetMemberData(MemberID):
     # 1. User's friends at local events: If the user is well connected, treat them well.
     #   > http://www.meetup.com/meetup_api/docs/2/member/#get - facebook_connection
@@ -293,6 +438,11 @@ def GetMemberData(MemberID):
     response = requests.get( endpoint )
     mem_res = Eval_Response(response)
     return mem_res
+
+# def SaveMemberData(MemberID):
+# def LoadMemberData(MemberID):
+
+#-----------------------------------------------------------------------------------------------------------------------
 
 def GetGroupMemberComments(GroupID,MemberID=None):
 
@@ -307,6 +457,21 @@ def GetGroupMemberComments(GroupID,MemberID=None):
     comment_res = Eval_Response(response)
     return comment_res
 
+def SaveGroupMemberComments(GroupID,MemberID=None):
+
+    comment_res = GetGroupMemberComments(GroupID,MemberID=MemberID)
+
+    file_string = str(GroupID) + '_' + str(MemberID)
+    SavePickle(comment_res, '_api_2_event_comments',file_string,PRINT="Saved Group Member Comments")
+
+    return comment_res
+
+def LoadGroupMemberComments(GroupID,MemberID=None,Directory='.'):
+    file_string = str(GroupID) + '_' + str(MemberID)
+    return LoadAPI(file_string,Directory=Directory)
+
+#-----------------------------------------------------------------------------------------------------------------------
+
 def GetMemberEventData(MemberID,EventID):
     '''
     Created initially as part of ranking members for rsvp vs waitlist at events
@@ -316,106 +481,82 @@ def GetMemberEventData(MemberID,EventID):
     '''
     # http://www.meetup.com/meetup_api/docs/:urlname/events/:event_id/comments/#list - member
     response = requests.get( API_ROOT + "2/events/" + str(EventID) + "?key=" + API_KEY +"&group_id="+ str(gid))
-    return member_group_data
+    return response
 
 #====================================================================================================
 # END ENDPOINT FUNCTIONS END ENDPOINT FUNCTIONS END ENDPOINT FUNCTIONS END ENDPOINT FUNCTIONS
 #====================================================================================================
-# BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING
-#====================================================================================================
-
-def SaveGroupMembers(group_url,OFFSET=1):
-    '''
-    Save to S3 or a Mongo Database
-
-    :param group_data:
-    :return:
-    '''
-
-    members = GetGroupMembers(group_url,OffsetLimit=OFFSET)
-
-    id = str(uuid.uuid1())
-    filename = group_url + '_api_2_members.' + id + '.pkl'
-    f = file(filename,'wb')
-    pkl.dump(members,f,protocol=pkl.HIGHEST_PROTOCOL)
-    f.close()
-    print("Saved Group Member Data")
-
-def LoadPickle(filename):
-    f = file(filename,'rb')
-    data = pkl.load(f)
-    return data
-
-def SaveMemberData(group_members):
-    '''
-    Save to S3 or a Mongo Database
-
-    :param group_members:
-    :return:
-    '''
-
-def SaveGroupReviews(group_reviews):
-    '''
-    Save to S3 or a Mongo Database
-
-    :param group_reviews:
-    :return:
-    '''
-
-def SaveGroupEvents(group_events):
-    '''
-    Save to S3 or a Mongo Database
-
-    :param group_reviews:
-    :return:
-    '''
-
-#====================================================================================================
-# END S3 SAVING END S3 SAVING END S3 SAVING END S3 SAVING END S3 SAVING END S3 SAVING
-#====================================================================================================
 # BEGIN AGGREGATION FUNCTIONS BEGIN AGGREGATION FUNCTIONS BEGIN AGGREGATION FUNCTIONS
 #====================================================================================================
 
-def GatherGroupData():
+# def GatherGroupData():
+#
+#     group_data = {}
+#     group_members = {}
+#     group_reviews = {}
+#     group_events = {}
+#     for g,gurl in enumerate(DC2_PROGRAMS):
+#         group_data[gurl] = GetGroupOpenData(gurl)
+#         group_members[gurl] = GetGroupMembers(gurl)
+#         group_reviews[gurl] = GetGroupReviews(gurl)
+#         group_events[gurl] = GetGroupEvents(gurl)
+#
+#     SaveGroupData(group_data)
+#     SaveMemberData(group_members)
+#     SaveGroupReviews(group_reviews)
+#     SaveGroupEvents(group_events)
+#
+# def CreateMemberConnections():
+#     '''
+#     Get data from DC2 S3/database and create member associations.
+#     There are lots of ways to associate two people, lets just list them all in a hash
+#     1. Attended same event
+#     2. Interested in the same topic
+#     3. Same Keywords (TFIDF of all DC2?)
+#
+#     :return:
+#     '''
+#
+#     gmems = GetGroupMembersDC2(gid)
+#     gmems_keys = gmems.keys()
+#     gmem_matrix = []
+#     for m1,gmem1 in enumerate(gmems_keys):
+#         for m2,gmem2 in enumerate(gmems_keys):
+#             # The goal is to show how members are connected in different ways, allowing for an organic search
+#             if True:
+#                 gmem_matrix.append((m1,m2))
+#
+#     return gmem_matrix
+#
+#     # SaveMemberConnections()
 
-    group_data = {}
-    group_members = {}
-    group_reviews = {}
-    group_events = {}
-    for g,gurl in enumerate(DC2_PROGRAMS):
-        group_data[gurl] = GetGroupOpenData(gurl)
-        group_members[gurl] = GetGroupMembers(gurl)
-        group_reviews[gurl] = GetGroupReviews(gurl)
-        group_events[gurl] = GetGroupEvents(gurl)
+#-----------------------------------------------------------------------------------------------------------------------
 
-    SaveGroupData(group_data)
-    SaveMemberData(group_members)
-    SaveGroupReviews(group_reviews)
-    SaveGroupEvents(group_events)
-
-def CreateMemberConnections():
+def GatherMemberActivityData(GroupURL):
     '''
-    Get data from DC2 S3/database and create member associations.
-    There are lots of ways to associate two people, lets just list them all in a hash
-    1. Attended same event
-    2. Interested in the same topic
-    3. Same Keywords (TFIDF of all DC2?)
+    We are gathering member data, but starting with the GropuURL. This has to do with the
+    group focus of the ranking algorithm.
+    In general, we are gathering data based on the service or algorithm that data supports.
+        If we tried to download all data from all endpoints we would be reconstructing the
+         Meetup.com API database, which is crazy.
 
+    :param GroupURL:
     :return:
     '''
 
-    gmems = GetGroupMembersDC2(gid)
-    gmems_keys = gmems.keys()
-    gmem_matrix = []
-    for m1,gmem1 in enumerate(gmems_keys):
-        for m2,gmem2 in enumerate(gmems_keys):
-            # The goal is to show how members are connected in different ways, allowing for an organic search
-            if True:
-                gmem_matrix.append((m1,m2))
+    epoch = datetime.utcfromtimestamp(0)
+    now = datetime.utcnow()
+    from_epoch = (now-epoch).total_seconds() *1000
 
-    return gmem_matrix
+    members = SaveGroupMembers(GroupURL,OFFSET_LIMIT=99999999999)
+    # members = LoadGroupMembers(GroupURL)
+    SaveGroupMemberComments(GroupURL)
+    for member in members:
+        mid = member['id']
+        SaveMemberGroups(mid)
+        SaveMemberEventRSVPs(mid,Time=[0,from_epoch],Status="past")
 
-    # SaveMemberConnections()
+    print("Member Activity Data Saved.")
 
 def RankMemberByActivity(GroupName,Test=False):
     '''
@@ -463,12 +604,7 @@ def RankMemberByActivity(GroupName,Test=False):
     plt.matshow(group_matrix)
 
     # Rank the members using the member-vector and association matrices
-
-    # Could loop through all members and their their events?
-    # events = GetGroupEvents(gid,[0,from_epoch],Status="past")
-    # for event in events['results']:
-    #     eid = event['id']
-    #     edata = GetGroupEvent(gid,eid)
+    # First cut people with no photo or no title
 
 def CalcMemberVector(members,gid):
     '''
@@ -491,8 +627,10 @@ def CalcMemberVector(members,gid):
 
     mem_vec = {}
 
-    mem_comments = GetGroupMemberComments(gid)
-    print("Got Member Comments")
+    # mem_comments = GetGroupMemberComments(gid)
+    mem_comments = LoadGroupMemberComments(gid)
+    if DEBUG:
+        print("Got Member Comments")
 
     for member in members:
         meys = member.keys()
@@ -516,8 +654,10 @@ def CalcMemberVector(members,gid):
 
         # How many common groups?
         # https://secure.meetup.com/meetup_api/console/?path=/members/:member_id
-        moups = GetMemberGroups(mid)
-        print("Got member Groups")
+        # moups = GetMemberGroups(mid)
+        moups = LoadMemberGroups(mid)
+        if DEBUG:
+            print("Got member Groups")
         mgkeys = moups.keys()
         if "memberships" in mgkeys:
             mem_vec[mid]['groups'] = {'id':[],'urlname':[],'organizer':[]} # Initialize
