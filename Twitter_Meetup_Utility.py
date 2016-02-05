@@ -41,6 +41,8 @@ API_KEY = API_KEYS['DC2']
 API_ROOT = 'https://api.meetup.com/'
 MEETUP_API_FAIL = 'Failed Response'
 
+DATA_DIRECTORY = "../data"
+
 #====================================================================================================
 # BEGIN ENDPOINT FUNCTIONS BEGIN ENDPOINT FUNCTIONS BEGIN ENDPOINT FUNCTIONS BEGIN ENDPOINT FUNCTIONS
 #====================================================================================================
@@ -157,9 +159,9 @@ def ParseResponse(source):
     print(result)
     return result
 
-#====================================================================================================
-# BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING BEGIN S3 SAVING
-#====================================================================================================
+#======
+# BEGIN S3 SAVING                                                           BEGIN S3 SAVING
+#======
 
 def SavePickle(save_data,endpoint_string,endpoint_input,PRINT='Saved Data'):
     '''
@@ -202,6 +204,7 @@ def LoadAPI(keyword,Directory='.'):
     # If something matched the keyword, load the latest one.
     if len(potential_files)>0:
         best_time = 0
+        load_this = None
         for this in potential_files:
             mod_time = time.ctime(os.path.getmtime(this))
             if mod_time > best_time:
@@ -210,8 +213,9 @@ def LoadAPI(keyword,Directory='.'):
             # print "last modified: %s" % time.ctime(os.path.getmtime(file))
             # print "created: %s" % time.ctime(os.path.getctime(file))
 
-    data = LoadPickle(load_this)
-    return data
+        data = LoadPickle(load_this)
+        return data
+    return None
 
 def SaveMemberData(group_members):
     '''
@@ -474,13 +478,13 @@ def LoadGroupMemberComments(GroupID,MemberID=None,Directory='.'):
 
 def GetMemberEventData(MemberID,EventID):
     '''
-    Created initially as part of ranking members for rsvp vs waitlist at events
+    Collecting member event data to know their RSVP status and others'...
 
     :param MemberID:
     :return:
     '''
-    # http://www.meetup.com/meetup_api/docs/:urlname/events/:event_id/comments/#list - member
-    response = requests.get( API_ROOT + "2/events/" + str(EventID) + "?key=" + API_KEY +"&group_id="+ str(gid))
+    # https://api.meetup.com/2/events?member_id=12251810&offset=0&format=json&limited_events=False&event_id=227834443&photo-host=public&page=500&fields=&order=time&desc=false&status=upcoming&sig_id=12251810&sig=653cac1d573b590a6889cef2e9a3433ea8ff1576
+    response = requests.get( API_ROOT + "2/events?key=" + API_KEY + "&member_id=" + str(MemberID) + "&event_id=" + str(EventID))
     return response
 
 #====================================================================================================
@@ -597,14 +601,36 @@ def RankMemberByActivity(GroupName,Test=False):
 
     mem_vec = CalcMemberVector(members,gid)
 
-    # topic_matrix = CalcTopicAssociations(mem_vec)
-    group_matrix = CalcGroupAssociations(mem_vec)
-    import matplotlib.pyplot as plt
-    # plt.matshow(topic_matrix)
-    plt.matshow(group_matrix)
+    event_matrix = CalcEventAssociations(mem_vec) # 1 Priority
+    # Use igraph to collect network statistics on matrices
+    # Could someone who up to a lot of events with a few people, while other show up to some with many people?
+    event_count = np.array([sum(event_matrix[m]) for m in range(len(event_matrix))])
+    # DELETE THE MATRIX TO SAVE RAM
+    mem_event_rank = [np.array(mem_vec.keys()),event_count] # Need to preserve member ID
+    mem_event_rank.sort(axis=1) # Prioritized by Event
 
-    # Rank the members using the member-vector and association matrices
-    # First cut people with no photo or no title
+    group_matrix = CalcGroupAssociations(mem_vec) # 2 Priority
+    group_count = np.array([sum(group_matrix[m]) for m in range(len(group_matrix))])
+    mem_group_rank = [np.array(mem_vec.keys()),group_count] # Need to preserve member ID
+    mem_group_rank.sort(axis=1) # Prioritized by Gropu
+
+    topic_matrix = CalcTopicAssociations(mem_vec) # 3 Priority
+    topic_count = np.array([sum(topic_matrix[m]) for m in range(len(topic_matrix))])
+    mem_topic_rank = [np.array(mem_vec.keys()),topic_count] # Need to preserve member ID
+    mem_topic_rank.sort(axis=1) # Prioritized by Topic
+
+    # Get the unique rankings from the Events,
+    #   tie breaker --> group rank
+    #       tie breaker --> topic rank
+    #           random selection
+    eranks = np.unique(mem_event_rank[1])
+    # for r in eranks:
+
+
+    # import matplotlib.pyplot as plt
+    # plt.matshow(topic_matrix)
+    # plt.matshow(group_matrix)
+
 
 def CalcMemberVector(members,gid):
     '''
@@ -627,16 +653,7 @@ def CalcMemberVector(members,gid):
 
     mem_vec = {}
 
-    # mem_comments = GetGroupMemberComments(gid)
-    mem_comments = LoadGroupMemberComments(gid)
-    if DEBUG:
-        print("Got Member Comments")
-
-    for member in members:
-        meys = member.keys()
-        mid = member['id']
-        mem_vec[mid] = {}
-
+    def conversatin():
         # Do they participate in recent event conversations?
         mem_vec[mid]['status'] = member['status']
         mem_vec[mid]['commented'] = 0
@@ -646,12 +663,14 @@ def CalcMemberVector(members,gid):
                 if mem_vec[mid]['commented'] >=3:
                     break
 
+    def active():
         # Membership count gives the number of groups they're active in
         if "membership_count" in meys:
             mem_vec[mid]['membership_count'] = member['membership_count']
         else:
             mem_vec[mid]['membership_count'] = 0
 
+    def groupin():
         # How many common groups?
         # https://secure.meetup.com/meetup_api/console/?path=/members/:member_id
         # moups = GetMemberGroups(mid)
@@ -677,10 +696,10 @@ def CalcMemberVector(members,gid):
                 mem_vec[mid]['groups']['urlname'] += [group['group']['id'] for group in memberships]
                 mem_vec[mid]['groups']['organizer'] += [False] * len(memberships)
 
-        # How many common topics? So much easier than the groups...
-        mem_vec[mid]['topics'] = member['topics']
-
+    def dedicatin():
         # Have they RSVP'd to any events?
+        # I WOULD LIKE TO RANK BASED ON EVENTS IN COMMON, WHICH INDICATES FRIENDSHIP
+        # DO I WANT ONLY DVDC RSVP'S OR ALL EVENTS?
         mem_rsvps = GetMemberEventRSVPs(mid,Time=[0,from_epoch],Status="past")
         print("Got member events")
         mem_vec[mid]['rsvps'] = 0
@@ -690,6 +709,28 @@ def CalcMemberVector(members,gid):
                 if mem_vec[mid]['rsvps'] >=3:
                     break
 
+    # mem_comments = GetGroupMemberComments(gid)
+    mem_comments = LoadGroupMemberComments(gid)
+    if DEBUG:
+        print("Got Member Comments")
+
+    for member in members:
+        meys = member.keys()
+        mid = member['id']
+        mem_vec[mid] = {}
+
+        conversatin()
+        active()
+        groupin()
+
+        # How many common topics? So much easier than the groups...
+        mem_vec[mid]['topics'] = member['topics']
+
+        dedicatin()
+        # I WOULD LIKE TO RANK BASED ON EVENTS IN COMMON, WHICH INDICATES FRIENDSHIP
+
+
+
         # MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!!
         # MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!! MONEY HONEY!!
         # This is a part of the user's group profile, and membership dues are tracked, but contributions are not.
@@ -698,6 +739,9 @@ def CalcMemberVector(members,gid):
         #             http://www.meetup.com/dcnightowls/money/
 
     return mem_vec
+
+def CalcEventAssociations(mem_vec):
+    return 'blah'
 
 def CalcGroupAssociations(mem_vec):
 

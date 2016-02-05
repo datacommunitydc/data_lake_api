@@ -15,7 +15,7 @@ GroupName = "Data-Visualization-DC"
 # MemberID = grpmem_res[0]['id']
 # mem_res = GetMemberData(MemberID)
 
-GatherMemberActivityData(GroupName)
+# GatherMemberActivityData(GroupName)
 RankMemberByActivity(GroupName,Test=True)
 
 # SaveGroupMembers(GroupName,OFFSET_LIMIT=100)
