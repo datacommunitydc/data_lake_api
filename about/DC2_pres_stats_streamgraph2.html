@@ -38,9 +38,9 @@ button {
 </style>
 <body>
 <!-- <button onclick="transition()">Update</button> -->
-<!-- <script src="http://d3js.org/d3.v2.js"></script> -->
-<script src="http://localhost/d3.v3.min.js"></script>
-<script src="http://code.jquery.com/jquery-1.10.2.min.js"></script>
+ <script src="http://d3js.org/d3.v2.js"></script>
+<!--<script src="http://localhost/d3.v3.min.js"></script>-->
+<!--<script src="http://code.jquery.com/jquery-1.10.2.min.js"></script>-->
 
 <div class="chart">
 </div>
@@ -51,9 +51,13 @@ button {
 // chart("DC2_RSVPs.csv", "blue");
 // chart("DC2_RSVPs_Norm.csv", "blue");
 // chart("DC2_normed_rsvps.csv", "blue");
-chart("/DC2/DC2_month_rsvps.csv", "blue");
+//chart("/DC2/DC2_month_rsvps.csv", "blue");
 // chart("/DC2/DC2_qtrs.csv", "blue");
 // chart("DC2_normed_total.csv", "blue");
+
+chart("DC2_DC2_CumulativeMemberships.csv", "blue");
+//chart("DC2_Prog_CumulativeMemberships.csv", "blue");
+//chart("DC2_Prog_Joined.csv", "blue");
 
 var datearray = [];
 var colorrange = [];
@@ -73,7 +77,8 @@ else if (color == "orange") {
 strokecolor = colorrange[0];
 
 // var format = d3.time.format("%m/%y");
-var format = d3.time.format("%m/%d/%y");
+//var format = d3.time.format("%m/%d/%y");
+var format = d3.time.format("%Y-%m-%d");
 
 var margin = {top: 20, right: 60, bottom: 60, left: 60};
 var width = document.body.clientWidth - margin.left - margin.right;
@@ -94,8 +99,12 @@ var x = d3.time.scale()
 var y = d3.scale.linear()
     .range([height-10, 0]);
 
-var z = d3.scale.ordinal()
-    .range(colorrange);
+var z = d3.scale
+//    .ordinal()
+    .linear()
+    .range([colorrange[0],colorrange[colorrange.length-1]])
+//    .range(colorrange)
+    .domain([0,9]);
 
 var xAxis = d3.svg.axis()
     .scale(x)
@@ -109,8 +118,8 @@ var yAxisr = d3.svg.axis()
     .scale(y);
 
 var stack = d3.layout.stack()
-    .offset("silhouette")
-    // .offset("zero")
+//    .offset("silhouette")
+     .offset("zero")
     .values(function(d) { return d.values; })
     .x(function(d) { return d.date; })
     .y(function(d) { return d.value; });
@@ -150,16 +159,11 @@ d3.csv(csvpath, function(data) {
     d.date = format.parse(d.date);
     d.value = +d.value;
   });
-  console.log("WTF!");
-  console.log("data: ",data);
-
-  // var legend_names = data.key
-  // console.log("keys",data.key);
 
   var data2 = data;
   var layers = stack(nest.entries(data));
 
-  console.log("extent",d3.extent(data, function(d) { return d.date; }) );
+//  console.log("extent",d3.extent(data, function(d) { return d.date; }) );
   x.domain(d3.extent(data, function(d) { return d.date; }));
   y.domain([0, d3.max(data, function(d) { return d.y0 + d.y; })]);
 
@@ -167,7 +171,9 @@ d3.csv(csvpath, function(data) {
       .data(layers)
     .enter().append("path")
       .attr("class", "layer")
-      .attr("d", function(d) { console.log("d.values",d.values); return area(d.values); })
+      .attr("d", function(d) {
+//        console.log("d.values",d.values);
+        return area(d.values); })
       .style("fill", function(d, i) { return z(i); });
 
 
@@ -192,20 +198,23 @@ d3.csv(csvpath, function(data) {
             return "rotate(-65)" 
         });
 
-  legend.selectAll('rect')
-      .data(layers)
-    .enter()
-      .append("rect")
-        .attr("x", width/2)
-        .attr("y", function(d, i){ return ((layers.length+1)*20) - (i*20);})
-        .attr("width", 15)
-        .attr("height", 15)
-        .style("fill", function(d,i) { return z(i); });
-      
-  // legend.append("text")
-  //   .attr("x", width/2 + 5)
-  //   .attr("y", function(d, i){ return i *  20;}) //25)
-  //   .text(function(d) { return z[layers.indexOf(d)] + ": " + d; });
+//  leg_enter = legend.selectAll('rect')
+//      .data(layers)
+//    .enter();
+//  leg_enter.append("rect")
+//        .attr("x", width/2)
+//        .attr("y", function(d, i){ return ((layers.length+1)*20) - (i*20);})
+//        .attr("width", 15)
+//        .attr("height", 15)
+//        .style("fill", function(d,i) { return z(i); });
+//  leg_enter.append("text")
+//       .attr("x", width/2 + 20)
+////       .attr("y", function(d, i){ return i *  25;}) //25)
+//       .attr("y", function(d, i){  return ((layers.length+1)*20) - (i*20) + 10;}) //25)
+//       .text(function(d) {
+////         return z[layers.indexOf(d)] + ": " + d.key;
+//         return d.key;
+//       });
 
   var saved = [];
 
