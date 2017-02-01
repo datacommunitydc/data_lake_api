@@ -1,5 +1,5 @@
-from database.Twitter_Meetup_Utility import *
-from social_interface.meetup import *
+from meetup import *
+
 
 GroupName = "Data-Visualization-DC"
 # MemberID = "146282552"
@@ -19,5 +19,3 @@ GroupName = "Data-Visualization-DC"
 
 # GatherMemberActivityData(GroupName)
 RankMemberByActivity(GroupName,Test=True)
-
-# SaveGroupMembers(GroupName,OFFSET_LIMIT=100)
